@@ -61,6 +61,7 @@ static struct argp_option options[] = {
 	{"debug",    'd', 0,       0, "Produce debugging output" },
 	{"quiet",    'q', 0,       0, "Be quiet" },
 	{"export-id",'e', "DEV",   0, "Print relay ID of the given DEV (/dev/hidrawXX) in udev-compatible format" },
+	{"set-serial",'s', "NEWID", 0, "Overwrite the serial of the first found relay board" },  // ADD THIS
 	{ 0 }
 };
 
@@ -70,6 +71,7 @@ struct arguments
 	int debug;
 	int verbose;
 	char *export_id;	/* "/dev/hidrawXX" or NULL */
+	char *set_serial_flag;
 };
 
 /* Parse a single option. */
@@ -86,6 +88,9 @@ parse_opt (int key, char *arg, struct argp_state *state)
 		break;
 	case 'e':
 		args->export_id = arg;
+		break;
+	case 's':
+		args->set_serial_flag = arg;
 		break;
 	case 'q':
 		args->verbose = 0;
@@ -113,6 +118,7 @@ int main(int argc, char *argv[])
 	struct arguments args = {
 		.debug = 0,
 		.export_id = NULL,
+		.set_serial_flag = NULL,
 		.verbose = 1,
 	};
 
@@ -186,6 +192,38 @@ int main(int argc, char *argv[])
 	if(args.debug) 
 		fprintf(stderr, "libusbrelay: %s\nusbrelay: %s\n", libusbrelay_version(), GITVERSION);
 	enumerate_relay_boards(getenv("USBID"), args.verbose, args.debug);
+
+	if (args.set_serial_flag) {
+		// Validate: exactly 5 printable ASCII chars
+		size_t slen = strlen(args.set_serial_flag);
+		int valid = (slen == Serial_Length);
+		for (size_t j = 0; valid && j < slen; j++) {
+			if (!isprint((unsigned char)args.set_serial_flag[j]))
+				valid = 0;
+		}
+		if (!valid) {
+			fprintf(stderr, "Error: serial must be exactly %d printable ASCII characters\n", Serial_Length);
+			exit(1);
+		}
+
+		relay_board *boards = get_relay_boards();
+		int count = get_relay_board_count();
+		if (count == 0) {
+			fprintf(stderr, "Error: no relay boards found\n");
+			exit(1);
+		}
+		// Target first board — user can later address by /dev/hidrawX for multi-board setups
+		fprintf(stderr, "Setting serial of '%s' (path: %s) to '%s'\n",
+			boards[0].serial, boards[0].path, args.set_serial_flag);
+		int res = set_serial(boards[0].serial, args.set_serial_flag, args.debug);
+		if (res < 0) {
+			fprintf(stderr, "Error: set_serial() failed\n");
+			exit(1);
+		}
+		fprintf(stderr, "Done. Unplug and replug the device for the new serial to take effect.\n");
+		shutdown();
+		return 0;
+	}
 
 	if (args.export_id) {
 		relay_board *relay = find_board(args.export_id, args.debug);
